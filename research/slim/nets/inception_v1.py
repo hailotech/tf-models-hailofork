@@ -262,7 +262,8 @@ def inception_v1(inputs,
                  spatial_squeeze=True,
                  reuse=None,
                  scope='InceptionV1',
-                 global_pool=False):
+                 global_pool=False,
+                 base_only=False, **kwargs):
   """Defines the Inception V1 architecture.
 
   This architecture is defined in:
@@ -304,6 +305,8 @@ def inception_v1(inputs,
     with slim.arg_scope([slim.batch_norm, slim.dropout],
                         is_training=is_training):
       net, end_points = inception_v1_base(inputs, scope=scope)
+      if base_only:
+        return net, end_points
       with tf.variable_scope('Logits'):
         if global_pool:
           # Global average pooling.

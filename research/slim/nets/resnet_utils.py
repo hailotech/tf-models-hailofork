@@ -74,7 +74,7 @@ def subsample(inputs, factor, scope=None):
     return slim.max_pool2d(inputs, [1, 1], stride=factor, scope=scope)
 
 
-def conv2d_same(inputs, num_outputs, kernel_size, stride, rate=1, scope=None):
+def conv2d_same(inputs, num_outputs, kernel_size, stride, rate=1, scope=None, activation_fn=tf.nn.relu):
   """Strided 2-D convolution with 'SAME' padding.
 
   When stride > 1, then we do explicit zero-padding, followed by conv2d with
@@ -119,7 +119,7 @@ def conv2d_same(inputs, num_outputs, kernel_size, stride, rate=1, scope=None):
     inputs = tf.pad(inputs,
                     [[0, 0], [pad_beg, pad_end], [pad_beg, pad_end], [0, 0]])
     return slim.conv2d(inputs, num_outputs, kernel_size, stride=stride,
-                       rate=rate, padding='VALID', scope=scope)
+                       rate=rate, padding='VALID', scope=scope, activation_fn=activation_fn)
 
 
 @slim.add_arg_scope

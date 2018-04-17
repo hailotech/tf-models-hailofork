@@ -129,6 +129,57 @@ def bottleneck(inputs,
                                             output)
 
 
+def resnet_unit_last_conv_and_add(shortcut, pre_residual, depth, rate=1,
+                                  stride=1, ksize=3, scope='conv2', activation_fn=tf.nn.relu):
+
+    residual = slim.conv2d(pre_residual, depth, ksize, stride,
+                           activation_fn=None, rate=rate, scope=scope)
+    return activation_fn(shortcut + residual)
+
+
+@slim.add_arg_scope
+def non_bottleneck(inputs, depth, stride, rate=1,
+                   outputs_collections=None, scope=None):
+    """
+    Simple 2-unit (non-bottleneck) residual unit variant with BN after convolutions.
+
+    This is the original residual unit proposed in [1]. See Fig. 1(a) of [2] for
+    its definition.
+
+    Args:
+    inputs: A tensor of size [batch, height, width, channels].
+    depth: The depth of the ResNet unit output.
+    stride: The ResNet unit's stride. Determines the amount of downsampling of
+      the units output compared to its input.
+    rate: An integer, rate for atrous convolution.
+    outputs_collections: Collection to add the ResNet unit output.
+    scope: Optional variable_scope.
+
+    Returns:
+    The ResNet unit's output.
+    """
+
+    with tf.variable_scope(scope, 'res_block_v1', [inputs]) as sc:
+
+        activation_fn = tf.nn.relu  # resolve_desired_activation(inputs.name)
+
+        depth_in = slim.utils.last_dimension(inputs.get_shape(), min_rank=4)
+        if depth == depth_in:
+            shortcut = tf.identity(inputs)
+        else:
+            shortcut = slim.conv2d(inputs, depth, [1, 1], stride=stride,  # normalizer_fn=None,
+                                   activation_fn=None, padding='VALID', scope='shortcut')
+
+        pre_residual = resnet_utils.conv2d_same(inputs, depth, 3, stride, rate=rate, scope='conv1',
+                                                activation_fn=activation_fn)
+
+        output = resnet_unit_last_conv_and_add(shortcut, pre_residual, depth, rate, scope='conv2',
+                                               activation_fn=activation_fn)
+
+        return slim.utils.collect_named_outputs(outputs_collections,
+                                                sc.original_name_scope,
+                                                output)
+
 def resnet_v1(inputs,
               blocks,
               num_classes=None,
@@ -139,7 +190,8 @@ def resnet_v1(inputs,
               spatial_squeeze=True,
               store_non_strided_activations=False,
               reuse=None,
-              scope=None):
+              scope=None,
+              base_only=False, **kwargs):
   """Generator for v1 ResNet models.
 
   This function generates a family of ResNet v1 models. See the resnet_v1_*()
@@ -223,9 +275,9 @@ def resnet_v1(inputs,
         net = resnet_utils.stack_blocks_dense(net, blocks, output_stride,
                                               store_non_strided_activations)
         # Convert end_points_collection into a dictionary of end_points.
-        end_points = slim.utils.convert_collection_to_dict(
-            end_points_collection)
-
+        end_points = slim.utils.convert_collection_to_dict(end_points_collection)
+        if base_only:
+            return net, end_points
         if global_pool:
           # Global average pooling.
           net = tf.reduce_mean(net, [1, 2], name='pool5', keep_dims=True)
@@ -243,13 +295,13 @@ resnet_v1.default_image_size = 224
 
 
 def resnet_v1_block(scope, base_depth, num_units, stride):
-  """Helper function for creating a resnet_v1 bottleneck block.
-
+  """Helper function for creating a resnet_v1 bottleneck block
+        (as used in resnet_X with X>=50)
   Args:
     scope: The scope of the block.
     base_depth: The depth of the bottleneck layer for each unit.
     num_units: The number of units in the block.
-    stride: The stride of the block, implemented as a stride in the last unit.
+    stride: The stride of the block, implemented as a stride in the **LAST** unit.
       All other units have stride=1.
 
   Returns:
@@ -266,6 +318,25 @@ def resnet_v1_block(scope, base_depth, num_units, stride):
   }])
 
 
+
+def resnet_v1_simple_block(scope, out_depth, num_units, stride):
+    """Helper function for creating a resnet_v1 non-bottleneck block.
+          (as used in resnet_X with X<=34)
+    Args:
+      scope: The scope of the block.
+      out_depth:
+      num_units: The number of units in the block.
+      stride: The stride of the block, implemented as a stride in the **FIRST** unit.
+        All other units have stride=1.
+
+    Returns:
+      A resnet_v1 bottleneck block.
+    """
+    return resnet_utils.Block(scope, non_bottleneck,
+                              [{'depth': out_depth, 'stride': stride}] +
+                              [{'depth': out_depth, 'stride': 1}] * (num_units - 1))
+
+
 def resnet_v1_50(inputs,
                  num_classes=None,
                  is_training=True,
@@ -274,7 +345,7 @@ def resnet_v1_50(inputs,
                  spatial_squeeze=True,
                  store_non_strided_activations=False,
                  reuse=None,
-                 scope='resnet_v1_50'):
+                 scope='resnet_v1_50', **kwargs):
   """ResNet-50 model of [1]. See resnet_v1() for arg and return description."""
   blocks = [
       resnet_v1_block('block1', base_depth=64, num_units=3, stride=2),
@@ -286,7 +357,7 @@ def resnet_v1_50(inputs,
                    global_pool=global_pool, output_stride=output_stride,
                    include_root_block=True, spatial_squeeze=spatial_squeeze,
                    store_non_strided_activations=store_non_strided_activations,
-                   reuse=reuse, scope=scope)
+                   reuse=reuse, scope=scope, **kwargs)
 resnet_v1_50.default_image_size = resnet_v1.default_image_size
 
 
@@ -360,3 +431,51 @@ def resnet_v1_200(inputs,
                    store_non_strided_activations=store_non_strided_activations,
                    reuse=reuse, scope=scope)
 resnet_v1_200.default_image_size = resnet_v1.default_image_size
+
+
+def resnet_v1_18(inputs,
+                 num_classes=None,
+                 is_training=True,
+                 global_pool=True,
+                 output_stride=None,
+                 spatial_squeeze=True,
+                 reuse=None,
+                 scope='resnet_v1_18', **kwargs):
+    """ResNet-18 model of [1]. See resnet_v1() for arg and return description."""
+    blocks = [
+        resnet_v1_simple_block('block1', out_depth=64, num_units=2, stride=1),
+        resnet_v1_simple_block('block2', out_depth=128, num_units=2, stride=2),
+        resnet_v1_simple_block('block3', out_depth=256, num_units=2, stride=2),
+        resnet_v1_simple_block('block4', out_depth=512, num_units=2, stride=2)
+    ]
+    return resnet_v1(inputs, blocks, num_classes, is_training,
+                     global_pool=global_pool, output_stride=output_stride,
+                     include_root_block=True, spatial_squeeze=spatial_squeeze,
+                     reuse=reuse, scope=scope, **kwargs)
+
+
+resnet_v1_18.default_image_size = resnet_v1.default_image_size
+
+
+def resnet_v1_34(inputs,
+                 num_classes=None,
+                 is_training=True,
+                 global_pool=True,
+                 output_stride=None,
+                 spatial_squeeze=True,
+                 reuse=None,
+                 scope='resnet_v1_34', **kwargs):
+    """ResNet-34 model of [1]. See resnet_v1() for arg and return description."""
+    blocks = [
+        resnet_v1_simple_block('block1', out_depth=64, num_units=3, stride=1),
+        resnet_v1_simple_block('block2', out_depth=128, num_units=4, stride=2),
+        resnet_v1_simple_block('block3', out_depth=256, num_units=6, stride=2),
+        resnet_v1_simple_block('block4', out_depth=512, num_units=3, stride=2),
+    ]
+    return resnet_v1(inputs, blocks, num_classes, is_training,
+                     global_pool=global_pool, output_stride=output_stride,
+                     include_root_block=True, spatial_squeeze=spatial_squeeze,
+                     reuse=reuse, scope=scope, **kwargs)
+
+
+resnet_v1_34.default_image_size = resnet_v1.default_image_size
